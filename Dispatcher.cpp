@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <climits>
 #include <cassert>
+#include <cstdio>
 
 #include "precomp.hpp"
 
@@ -51,17 +52,28 @@ std::string privateKeyToStr(cl_ulong4 privateKey) {
 	return ss.str();
 }
 
-static void printPrivateKeyStream(cl_ulong4 seed, cl_ulong round, result r) {
-	// Format private key
-	cl_ulong4 privateKey = restorePrivateKey(seed, r.foundId, round);
-	
-	// Output only hex private key (64 chars, no "0x" prefix)
-	printf("%016llx%016llx%016llx%016llx\n",
-	       (unsigned long long)privateKey.s[3],
-	       (unsigned long long)privateKey.s[2],
-	       (unsigned long long)privateKey.s[1],
-	       (unsigned long long)privateKey.s[0]);
-	fflush(stdout);  // Important for real-time piping!
+static void printPrivateKeyStream(char * dst, const cl_ulong4 & privateKey) {
+	// Output 64 hex chars (no "0x" prefix) + newline, formatted by hand:
+	// orders of magnitude faster than printf for millions of keys per second.
+	static const char hex[] = "0123456789abcdef";
+	for (int limb = 3; limb >= 0; --limb) {
+		const cl_ulong v = (cl_ulong)privateKey.s[limb];
+		char * p = dst + (size_t)(3 - limb) * 16;
+		for (int i = 0; i < 16; ++i) {
+			p[i] = hex[(v >> (60 - 4 * i)) & 0xF];
+		}
+	}
+	dst[64] = '\n';
+}
+
+static void printMatchStream(cl_ulong4 seed, cl_ulong round, result r, cl_uchar score, const Mode & mode) {
+	// In stream mode the key itself is part of the stdout stream; report the
+	// vanity match details on stderr instead so stdout stays a clean key feed.
+	const cl_ulong4 privateKey = restorePrivateKey(seed, r.foundId, round);
+	const std::string strPrivate = privateKeyToStr(privateKey);
+	const std::string strPublic = toHex(r.foundHash, 20);
+
+	std::cerr << "Match: score " << std::setw(2) << (int)score << " " << mode.transformName() << ": 0x" << strPublic << " private: 0x" << strPrivate << " (id: " << r.foundId << " round: " << int(round) << ")" << std::endl;
 }
 
 static void printResult(cl_ulong4 seed, cl_ulong round, result r, cl_uchar score, const std::chrono::time_point<std::chrono::steady_clock> & timeStart, const Mode & mode) {
@@ -193,12 +205,91 @@ Dispatcher::Device::~Device() {
 }
 
 Dispatcher::Dispatcher(cl_context & clContext, cl_program & clProgram, const Mode mode, const size_t worksizeMax, const size_t inverseSize, const size_t inverseMultiple, const cl_uchar clScoreQuit, const bool streamKeys)
-	: m_clContext(clContext), m_clProgram(clProgram), m_mode(mode), m_worksizeMax(worksizeMax), m_inverseSize(inverseSize), m_size(inverseSize*inverseMultiple), m_HashTableSize(HASH_TABLE_SET_SIZE * (mode.extended ? 2 : 1)), m_clScoreMax(mode.score), m_clScoreQuit(clScoreQuit), m_streamKeys(streamKeys), m_eventFinished(NULL), m_countPrint(0) {
+	: m_clContext(clContext), m_clProgram(clProgram), m_mode(mode), m_worksizeMax(worksizeMax), m_inverseSize(inverseSize), m_size(inverseSize*inverseMultiple), m_HashTableSize(HASH_TABLE_SET_SIZE * (mode.extended ? 2 : 1)), m_clScoreMax(mode.score), m_clScoreQuit(clScoreQuit), m_eventFinished(NULL), m_countPrint(0), m_streamKeys(streamKeys) {
 
 }
 
 Dispatcher::~Dispatcher() {
+	stopStreamer();
+}
 
+void Dispatcher::startStreamer() {
+	if (m_size > 0xFFFFFFFFull) {
+		throw std::runtime_error("stream-keys: work size too large for key enumeration");
+	}
+	m_streamThread = std::thread(&Dispatcher::streamWorker, this);
+}
+
+void Dispatcher::stopStreamer() {
+	if (m_streamThread.joinable()) {
+		{
+			std::lock_guard<std::mutex> lock(m_streamMutex);
+			StreamTask task;
+			task.size = 0; // shutdown sentinel
+			m_streamQueue.push(task);
+		}
+		m_streamCv.notify_all();
+		m_streamThread.join();
+	}
+}
+
+void Dispatcher::streamEnqueue(cl_ulong4 seed, cl_ulong round) {
+	StreamTask task;
+	task.seed = seed;
+	task.round = round;
+	task.size = m_size;
+
+	{
+		// Blocks (with the lock released) while the printer thread is more than
+		// STREAM_QUEUE_MAX_TASKS rounds behind. This is the backpressure that
+		// keeps memory bounded and stops the GPU from running away from stdout.
+		std::unique_lock<std::mutex> lock(m_streamMutex);
+		m_streamCv.wait(lock, [this]{ return m_streamQueue.size() < STREAM_QUEUE_MAX_TASKS; });
+		m_streamQueue.push(task);
+	}
+	m_streamCv.notify_all();
+}
+
+void Dispatcher::streamWorker() {
+	// Reconstructs the private key of every work item of every completed round
+	// and writes the whole stream to stdout in a single, gapless sequence.
+	// This is possible because keys are fully deterministic: the key of work
+	// item 'id' in round 'round' of a device seeded with 'seed' is exactly
+	// restorePrivateKey(seed, id, round) - the same formula printResult uses.
+	const size_t cap = 1 << 20;
+	char * buf = new char[cap];
+	size_t len = 0;
+
+	while (true) {
+		StreamTask task;
+		{
+			std::unique_lock<std::mutex> lock(m_streamMutex);
+			m_streamCv.wait(lock, [this]{ return !m_streamQueue.empty(); });
+			task = m_streamQueue.front();
+			m_streamQueue.pop();
+		}
+		m_streamCv.notify_all();
+
+		if (task.size == 0) {
+			break; // shutdown sentinel
+		}
+
+		for (size_t id = 0; id < task.size; ++id) {
+			if (len > cap - 80) {
+				fwrite(buf, 1, len, stdout);
+				len = 0;
+			}
+			printPrivateKeyStream(buf + len, restorePrivateKey(task.seed, (cl_uint)id, task.round));
+			len += 65;
+		}
+		if (len) {
+			fwrite(buf, 1, len, stdout);
+			len = 0;
+		}
+		fflush(stdout);
+	}
+
+	delete[] buf;
 }
 
 void Dispatcher::addDevice(cl_device_id clDeviceId, const size_t worksizeLocal, const size_t index) {
@@ -312,6 +403,11 @@ void Dispatcher::run() {
 	std::cerr << "  like any software might contain bugs and it does by design cut corners to" << std::endl;
 	std::cerr << "  improve overall performance." << std::endl;
 	std::cerr << std::endl;
+
+	if (m_streamKeys) {
+		std::cerr << "Streaming every generated private key to stdout (" << m_size << " keys per round per GPU)..." << std::endl;
+		startStreamer();
+	}
 
 	for (auto it = m_vDevices.begin(); it != m_vDevices.end(); ++it) {
 		dispatch(*(*it));
@@ -671,7 +767,7 @@ void Dispatcher::handleResult(Device & d) {
 
 				// Choose output format based on streamKeys flag
 				if (m_streamKeys) {
-					printPrivateKeyStream(d.m_clSeed, d.m_round, r);
+					printMatchStream(d.m_clSeed, d.m_round, r, i, m_mode);
 				} else {
 					printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
 				}
@@ -767,6 +863,15 @@ void Dispatcher::onEvent(cl_event event, cl_int status, Device & d) {
 			handleReverse(d);
 		} else {
 			handleResult(d);
+		}
+
+		// Queue the completed round for key streaming (--stream-keys).
+		// d.m_round was incremented above and matches the round the GPU
+		// just tested, exactly like in handleResult()/printResult().
+		// This call may block until the printer thread catches up, which
+		// throttles this device's next dispatch to the speed of stdout.
+		if (m_streamKeys && m_mode.name != "reverse" && m_mode.name != "hashTable") {
+			streamEnqueue(d.m_clSeed, d.m_round);
 		}
 
 		bool bDispatch = true;

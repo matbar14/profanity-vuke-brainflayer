@@ -43,9 +43,14 @@ usage: ./profanity [OPTIONS]
                             parallell. [default = 16384]
 
   Output control:
-    -K, --stream-keys       Output only private keys in hex format (64 chars,
-                            no 0x prefix) for piping to other tools like
-                            brainflayer. One key per line.
+    -K, --stream-keys       Stream EVERY generated private key to stdout, one
+                            per line, as 64 hex chars (no 0x prefix). Works in
+                            all search modes (benchmark, zeros, letters, ...);
+                            vanity matches are reported on stderr so stdout
+                            stays a clean key feed. Keys are reconstructed on
+                            the CPU from the device seed, so the stream is
+                            complete and gapless. Not available in reverse or
+                            hash-table modes.
 
   Examples:
     ./profanity --leading f
@@ -55,9 +60,12 @@ usage: ./profanity [OPTIONS]
     ./profanity --leading-range -m 10 -M 12
     ./profanity --range -m 0 -M 1
     ./profanity --contract --leading 0
-    
-    Stream keys to brainflayer:
+
+    Stream ALL generated keys to brainflayer (works with every mode above):
     ./profanity --benchmark --stream-keys | ./brainflayer -x -t priv -v -b bitcoin.blf
+
+    Keep vanity matching enabled and log matches separately:
+    ./profanity --leading 0 --stream-keys 2> matches.log | ./brainflayer -x -t priv -b bitcoin.blf
 
   About:
     profanity is a vanity address generator for Ethereum that utilizes

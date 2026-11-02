@@ -2,10 +2,11 @@
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
+#include <climits>
 
 using namespace std;
 
-Mode::Mode() : score(0) {
+Mode::Mode() : score(0), steps(INT_MAX), skipX(0), skipY(0), extended(false), cache(false), single(false) {
 
 }
 

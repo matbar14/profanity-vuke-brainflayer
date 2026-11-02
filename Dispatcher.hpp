@@ -6,6 +6,9 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <thread>
 #include <unordered_map>
 
 #if defined(__APPLE__) || defined(__MACOSX)
@@ -121,6 +124,11 @@ class Dispatcher {
 		void handleReverse(Device & d);
 		void randomizeSeed(Device & d);
 
+		void startStreamer();
+		void stopStreamer();
+		void streamEnqueue(cl_ulong4 seed, cl_ulong round);
+		void streamWorker();
+
 		void onEvent(cl_event event, cl_int status, Device & d);
 
 		void printSpeed();
@@ -144,6 +152,21 @@ class Dispatcher {
 		std::vector<Device *> m_vDevices;
 
 		cl_event m_eventFinished;
+
+		// Key streaming (--stream-keys): a printer thread consumes round descriptors
+		// from a bounded queue, reconstructing and writing every generated private
+		// key to stdout. Producers (OpenCL event callbacks) block when the queue is
+		// full, which throttles the GPU to the pace of the consumer of the stream.
+		struct StreamTask {
+			cl_ulong4 seed;
+			cl_ulong round;
+			size_t size; // 0 = shutdown sentinel
+		};
+		static const size_t STREAM_QUEUE_MAX_TASKS = 8;
+		std::queue<StreamTask> m_streamQueue;
+		std::mutex m_streamMutex;
+		std::condition_variable m_streamCv;
+		std::thread m_streamThread;
 
 		// Run information
 		std::mutex m_mutex;

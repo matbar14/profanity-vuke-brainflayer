@@ -201,12 +201,12 @@ int main(int argc, char * * argv) {
 		argp.addSwitch('s', "steps", iModeSteps);
 		argp.addSwitch('x', "skip-x", iModeSkipX);
 		argp.addSwitch('y', "skip-y", iModeSkipY);
-		argp.addSwitch('h', "hash-table", bModeHashTable);
+		argp.addSwitch('H', "hash-table", bModeHashTable);
 		argp.addSwitch('S', "single", bModeSingle);
 		argp.addSwitch('K', "stream-keys", bStreamKeys);
 
 		if (!argp.parse()) {
-			std::cout << "error: bad arguments, try again :<" << std::endl;
+			std::cerr << "error: bad arguments, try again :<" << std::endl;
 			return 1;
 		}
 
@@ -238,19 +238,19 @@ int main(int argc, char * * argv) {
 			mode = Mode::doubles();
 		} else if (bModeHashTable) {
 			mode = Mode::hashTable(bMode16Gb, iModeSkipY);
-		} else if (bModeReverse != -1) {
+		} else if (bModeReverse) {
 			if (strModeTarget.empty()) {
-				std::cout << "Specify a target public address with -t" << std::endl;
+				std::cerr << "Specify a target public address with -t" << std::endl;
 				return 1;
 			}
 
 			if (strModeTarget.size() != 130) {
-				std::cout << "Target public address must be 130 characters long and start with 0x" << std::endl;
+				std::cerr << "Target public address must be 130 characters long and start with 0x" << std::endl;
 				return 1;
 			}
 
 			if (iModeSteps == 0) {
-				std::cout << "Specify the number of steps with -s" << std::endl;
+				std::cerr << "Specify the number of steps with -s" << std::endl;
 				return 1;
 			}
 
@@ -268,6 +268,11 @@ int main(int argc, char * * argv) {
 			mode.target = ADDRESS;
 		}
 		std::cerr << "Target: " << mode.transformName() << std:: endl;
+
+		if (bStreamKeys && (mode.name == "reverse" || mode.name == "hashTable")) {
+			std::cerr << "error: --stream-keys is not available in reverse or hash-table modes" << std::endl;
+			return 1;
+		}
 
 		std::vector<cl_device_id> vFoundDevices = getAllDevices();
 		std::vector<cl_device_id> vDevices;
@@ -324,7 +329,7 @@ int main(int argc, char * * argv) {
 			// Create program from binaries
 			bUsedCache = true;
 
-		std::cerr << "  Loading kernel from binary..." << std::flush;
+			std::cerr << "  Loading kernel from binary..." << std::flush;
 			const unsigned char * * pKernels = new const unsigned char *[vDevices.size()];
 			for (size_t i = 0; i < vDeviceBinary.size(); ++i) {
 				pKernels[i] = reinterpret_cast<const unsigned char *>(vDeviceBinary[i].data());
