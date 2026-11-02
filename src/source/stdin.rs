@@ -5,7 +5,7 @@ use std::io::{self, BufRead};
 
 
 use super::{ProcessStats, Source};
-use crate::derive::KeyDeriver;
+use crate::derive::{DerivedKey, KeyDeriver};
 use crate::matcher::Matcher;
 use crate::output::Output;
 use crate::transform::{Input, Transform};
@@ -96,14 +96,22 @@ fn process_batch(
         transform.apply_batch(inputs, buffer);
 
         for (source, key) in buffer.iter() {
-            let derived = deriver.derive(key);
+            let derived = if matcher.is_none() && !output.needs_derivation() {
+                // Raw streaming to an external matcher: skip address
+                // derivation, the consumer derives addresses itself.
+                DerivedKey::raw_only(key)
+            } else {
+                deriver.derive(key)
+            };
 
             if let Some(m) = matcher {
                 if let Some(match_info) = m.check(&derived) {
                     output.hit(source, transform.name(), &derived, &match_info)?;
                     matches_found += 1;
                 }
-            } else {
+            }
+
+            if matcher.is_none() || output.wants_all_keys() {
                 output.key(source, transform.name(), &derived)?;
             }
 

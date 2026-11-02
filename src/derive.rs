@@ -55,6 +55,40 @@ impl DerivedKey {
             &self.p2tr,
         ]
     }
+
+    /// Create a minimal DerivedKey without deriving the public key or
+    /// addresses.
+    ///
+    /// Only `raw` and `private_key_hex` are populated; every other field is
+    /// empty/zero. Used when keys are streamed raw to an external matcher
+    /// (e.g. brainflayer), which derives addresses itself — doing the EC
+    /// math here as well would only waste CPU.
+    pub fn raw_only(raw: &[u8; 32]) -> Self {
+        const HEX_LOWER: &[u8; 16] = b"0123456789abcdef";
+        let mut hex = String::with_capacity(64);
+        for b in raw {
+            hex.push(HEX_LOWER[(b >> 4) as usize] as char);
+            hex.push(HEX_LOWER[(b & 0x0f) as usize] as char);
+        }
+        Self {
+            raw: *raw,
+            private_key_hex: hex,
+            private_key_decimal: String::new(),
+            private_key_binary: String::new(),
+            bit_length: 0,
+            hamming_weight: 0,
+            leading_zeros: 0,
+            pubkey_compressed: String::new(),
+            pubkey_uncompressed: String::new(),
+            wif_compressed: String::new(),
+            wif_uncompressed: String::new(),
+            p2pkh_compressed: String::new(),
+            p2pkh_uncompressed: String::new(),
+            p2sh_p2wpkh: String::new(),
+            p2wpkh: String::new(),
+            p2tr: String::new(),
+        }
+    }
 }
 
 /// Key deriver - converts 32-byte keys to addresses.

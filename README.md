@@ -187,6 +187,51 @@ vuke scan --transform=sha256 --transform=double_sha256 --transform=md5 --targets
 cat passwords.txt | vuke generate --transform=sha256 stdin
 ```
 
+### Stream raw keys to brainflayer
+
+`--stream-keys` turns vuke into a key feeder for external matchers such as
+[brainflayer](https://github.com/ryancdotorg/brainflayer): every generated
+private key is written to stdout as 64 lowercase hex chars per line (no `0x`
+prefix) — the exact format brainflayer expects for `-x -t priv`. Progress and
+stats go to stderr, so stdout stays a clean key feed. In this mode vuke skips
+address derivation entirely (the consumer derives addresses itself), so the
+pipe runs at full transform speed.
+
+```bash
+# Scan a numeric range through a bloom filter of known addresses
+vuke generate --transform=milksad --stream-keys range --start 1 --end 100000000 \
+  | brainflayer -x -t priv -b bitcoin.blf
+
+# Scan a wordlist (classic brainwallet hunting)
+vuke generate --transform=sha256 --stream-keys wordlist --file passwords.txt \
+  | brainflayer -x -t priv -b bitcoin.blf
+
+# Scan with a different transform per run
+vuke generate --transform=sha256 --transform=double_sha256 --transform=md5 \
+  --stream-keys wordlist --file passwords.txt | brainflayer -x -t priv -v -b bitcoin.blf
+```
+
+`--stream-keys` also works in `scan` mode: all scanned keys flow to stdout
+while vuke's own address matches are reported on stderr at the same time —
+useful when checking against two target sets at once (vuke targets and a
+brainflayer bloom filter):
+
+```bash
+vuke scan --transform=milksad --targets known_addresses.txt --stream-keys \
+  range --start 1 --end 100000000 | brainflayer -x -t priv -b bitcoin.blf
+```
+
+Notes:
+
+* Works with every source (`range`, `wordlist`, `stdin`, `timestamps`, `files`)
+  and any number of `--transform` flags (all keys of all transforms are
+  streamed).
+* Cannot be combined with `--output`/`--verbose` (generate) or `--output`
+  (scan); the stream always goes to stdout.
+* brainflayer consumes roughly one EC multiplication per key, so it — not
+  vuke — is the bottleneck of the pipe; this is by design (same trade-off as
+  profanity's `--stream-keys`).
+
 ### Save results to file
 
 ```bash

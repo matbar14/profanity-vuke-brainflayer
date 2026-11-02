@@ -6,7 +6,7 @@ use indicatif::ProgressBar;
 use rayon::prelude::*;
 
 use super::{OutputGuard, ProcessStats, Source};
-use crate::derive::KeyDeriver;
+use crate::derive::{DerivedKey, KeyDeriver};
 use crate::matcher::Matcher;
 use crate::output::Output;
 use crate::transform::{Input, Transform};
@@ -238,14 +238,22 @@ fn process_timestamp(
                 break;
             }
 
-            let derived = deriver.derive(key);
+            let derived = if matcher.is_none() && !output.needs_derivation() {
+                // Raw streaming to an external matcher: skip address
+                // derivation, the consumer derives addresses itself.
+                DerivedKey::raw_only(key)
+            } else {
+                deriver.derive(key)
+            };
 
             if let Some(m) = matcher {
                 if let Some(match_info) = m.check(&derived) {
                     guard.check(output.hit(source, transform.name(), &derived, &match_info));
                     matches.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
-            } else {
+            }
+
+            if matcher.is_none() || output.wants_all_keys() {
                 guard.check(output.key(source, transform.name(), &derived));
             }
 

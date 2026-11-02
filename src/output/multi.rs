@@ -15,6 +15,14 @@ impl MultiOutput {
 }
 
 impl Output for MultiOutput {
+    fn wants_all_keys(&self) -> bool {
+        self.outputs.iter().any(|o| o.wants_all_keys())
+    }
+
+    fn needs_derivation(&self) -> bool {
+        self.outputs.iter().any(|o| o.needs_derivation())
+    }
+
     fn key(&self, source: &str, transform: &str, derived: &DerivedKey) -> Result<()> {
         for output in &self.outputs {
             output.key(source, transform, derived)?;

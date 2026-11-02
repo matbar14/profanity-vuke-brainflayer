@@ -12,7 +12,7 @@ use vuke::analyze::{
 use vuke::derive::KeyDeriver;
 use vuke::matcher::Matcher;
 use vuke::network::parse_network;
-use vuke::output::{ConsoleOutput, Output};
+use vuke::output::{ConsoleOutput, Output, StreamOutput};
 use vuke::source::{
     FilesSource, RangeSource, Source, StdinSource, TimestampSource, WordlistSource,
 };
@@ -192,6 +192,13 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
+        /// Stream every generated private key to stdout as 64 lowercase hex
+        /// chars per line (no 0x prefix) — e.g. for piping into brainflayer:
+        /// vuke generate --stream-keys ... | brainflayer -x -t priv -b file.blf
+        /// Stats and progress go to stderr; matches (scan mode) go to stderr.
+        #[arg(long, conflicts_with_all = ["output", "verbose"])]
+        stream_keys: bool,
+
         #[command(flatten)]
         storage_args: StorageArgs,
 
@@ -219,6 +226,12 @@ enum Command {
         /// Output file (default: stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Stream every scanned private key to stdout as 64 lowercase hex
+        /// chars per line (e.g. for piping into brainflayer); matches are
+        /// additionally reported on stderr.
+        #[arg(long, conflicts_with = "output")]
+        stream_keys: bool,
 
         #[command(flatten)]
         storage_args: StorageArgs,
@@ -400,12 +413,21 @@ fn main() -> Result<()> {
             network,
             verbose,
             output,
+            stream_keys,
             storage_args,
             bitimage_args,
         } => {
             let network = parse_network(&network)?;
             let transform = apply_bitimage_config(transform, &bitimage_args);
-            run_generate(source, transform, network, output, verbose, &storage_args)
+            run_generate(
+                source,
+                transform,
+                network,
+                output,
+                verbose,
+                stream_keys,
+                &storage_args,
+            )
         }
 
         Command::Scan {
@@ -414,12 +436,21 @@ fn main() -> Result<()> {
             targets,
             network,
             output,
+            stream_keys,
             storage_args,
             bitimage_args,
         } => {
             let network = parse_network(&network)?;
             let transform = apply_bitimage_config(transform, &bitimage_args);
-            run_scan(source, transform, network, targets, output, &storage_args)
+            run_scan(
+                source,
+                transform,
+                network,
+                targets,
+                output,
+                stream_keys,
+                &storage_args,
+            )
         }
 
         Command::Single {
@@ -638,6 +669,7 @@ fn run_generate(
     network: bitcoin::Network,
     output_file: Option<PathBuf>,
     verbose: bool,
+    stream_keys: bool,
     sa: &StorageArgs,
 ) -> Result<()> {
     #[cfg(feature = "storage-iceberg")]
@@ -648,11 +680,15 @@ fn run_generate(
     let source = create_source(source_cmd)?;
     let transform_instances = create_transforms(transforms.clone());
 
-    let console_out: Box<dyn Output> = match (output_file, verbose) {
-        (Some(path), true) => Box::new(ConsoleOutput::to_file_verbose(&path)?),
-        (Some(path), false) => Box::new(ConsoleOutput::to_file(&path)?),
-        (None, true) => Box::new(ConsoleOutput::verbose()),
-        (None, false) => Box::new(ConsoleOutput::new()),
+    let console_out: Box<dyn Output> = if stream_keys {
+        Box::new(StreamOutput::new())
+    } else {
+        match (output_file, verbose) {
+            (Some(path), true) => Box::new(ConsoleOutput::to_file_verbose(&path)?),
+            (Some(path), false) => Box::new(ConsoleOutput::to_file(&path)?),
+            (None, true) => Box::new(ConsoleOutput::verbose()),
+            (None, false) => Box::new(ConsoleOutput::new()),
+        }
     };
 
     #[cfg(feature = "storage")]
@@ -697,6 +733,7 @@ fn run_scan(
     network: bitcoin::Network,
     targets: String,
     output_file: Option<PathBuf>,
+    stream_keys: bool,
     sa: &StorageArgs,
 ) -> Result<()> {
     #[cfg(feature = "storage-iceberg")]
@@ -725,9 +762,13 @@ fn run_scan(
     let source = create_source(source_cmd)?;
     let transform_instances = create_transforms(transforms.clone());
 
-    let console_out: Box<dyn Output> = match output_file {
-        Some(path) => Box::new(ConsoleOutput::to_file(&path)?),
-        None => Box::new(ConsoleOutput::new()),
+    let console_out: Box<dyn Output> = if stream_keys {
+        Box::new(StreamOutput::new())
+    } else {
+        match output_file {
+            Some(path) => Box::new(ConsoleOutput::to_file(&path)?),
+            None => Box::new(ConsoleOutput::new()),
+        }
     };
 
     #[cfg(feature = "storage")]
