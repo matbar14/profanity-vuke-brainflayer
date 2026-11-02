@@ -1,9 +1,32 @@
 # profanity-brainflayer
 
-A fork of [profanity](https://github.com/johguse/profanity) — an OpenCL vanity
-address generator for Ethereum — extended with a **full key streaming mode**
-and bundled with **[brainflayer-MultiBlooms](https://github.com/ryancdotorg/brainflayer)**
-for bloom-filter lookups of known addresses.
+One toolkit, three parts: **two key generators** that both stream every key
+they produce, and **one matcher** that checks that stream against bloom
+filters of known addresses.
+
+- **[profanity](https://github.com/johguse/profanity)** — an OpenCL vanity
+  address generator for Ethereum, extended here with a **full key streaming
+  mode** (`--stream-keys`).
+- **[vuke](https://github.com/oritwoen/vuke)** (bundled under `vuke/`) — a Rust
+  generator that turns wordlists, numeric ranges, timestamps, files and stdin
+  into private keys via pluggable transforms (brainwallet SHA256, milksad, LCG
+  family, xorshift, MT64, SHA256 chains, Bitimage and more), also with a
+  `--stream-keys` mode.
+- **[brainflayer-MultiBlooms](https://github.com/ryancdotorg/brainflayer)** —
+  vendored brainflayer variant that can load multiple bloom filters at once,
+  consuming any generator's stream:
+
+```
+profanity --stream-keys ─┐
+                         ├─▶ brainflayer -x -t priv -b bitcoin.blf
+vuke --stream-keys ──────┘
+```
+
+Both generators emit the identical stream format — one private key per line,
+64 lowercase hex chars, no `0x` prefix — which is exactly what
+`brainflayer -x -t priv` expects. Pick a generator by workload:
+profanity for raw GPU throughput on arbitrary keys, vuke for CPU enumeration
+of *known-weak* key derivation practices.
 
 What you get:
 
@@ -21,6 +44,8 @@ What you get:
   from a raw signed transaction.
 - **Vendored brainflayer-MultiBlooms** with `secp256k1` and `scrypt-jane`
   checked into the tree — no git submodules needed.
+- **Vendored vuke** with its own `--stream-keys` mode — the same brainflayer
+  pipe format, driven by CPU-side transforms instead of a GPU.
 
 ## Repository layout
 
@@ -29,9 +54,13 @@ What you get:
 │       profanity sources (C++ / OpenCL)
 ├── pubkey.py, requirements.txt
 │       recover a public key from a raw signed Ethereum transaction
-└── brainflayer-MultiBlooms/
-        brainflayer variant supporting multiple bloom filters,
-        with vendored secp256k1/ and scrypt-jane/ (plain sources)
+├── brainflayer-MultiBlooms/
+│       brainflayer variant supporting multiple bloom filters,
+│       with vendored secp256k1/ and scrypt-jane/ (plain sources)
+└── vuke/
+        Rust key generator (sources: wordlist/range/stdin/timestamps/files;
+        transforms: sha256, milksad, LCG, xorshift, mt64, ...)
+        with --stream-keys for the same brainflayer pipe
 ```
 
 Build artifacts (`.o` files, prebuilt binaries, autotools cache) are no longer
@@ -55,9 +84,20 @@ Requires gcc, OpenSSL, GMP and autotools (the build runs `autogen.sh` /
 `configure` for the vendored secp256k1 automatically).
 
 ```
-cd brainflayer-MultiBlooms
-make                # builds secp256k1, then brainflayer and the helper tools
+make brainflayer    # from the repo root, or: cd brainflayer-MultiBlooms && make
 ```
+
+### vuke
+
+Requires a Rust toolchain (rustup / cargo 1.70+).
+
+```
+make vuke           # from the repo root
+# or: cd vuke && cargo build --release   → vuke/target/release/vuke
+```
+
+GPU (`--features gpu`, wgpu) and Parquet storage (`--features storage`) are
+optional cargo features of vuke, not needed for streaming into brainflayer.
 
 ## profanity usage
 
@@ -116,6 +156,60 @@ a bloom filter, brainflayer's own incremental mode (`-I <start key> -x -t priv`)
 avoids the pipe entirely; the streaming mode is for when you want profanity's
 GPU pipeline, vanity scoring and key reconstruction in one process.
 
+## vuke: CPU generator for weak key-derivation practices
+
+vuke attacks the opposite end of the spectrum from profanity's raw random
+stream: keys that were *derived* from guessable inputs. Each `--transform`
+models one historical weakness — `sha256` (classic brainwallets),
+`double_sha256`, `md5`, `milksad`, the `lcg:<libc>` family, `xorshift`,
+`mt64`, `sha256_chain`, `bitimage` (wallet-file images) and others; see
+`vuke/README.md` for the full table.
+
+Sources: `wordlist` (one passphrase per line), `range` (numeric), `timestamps`
+(Unix time), `files` (wallet/key files) and `stdin`.
+
+### Streaming mode: `--stream-keys`
+
+Exactly like profanity: stdout carries every generated private key (64 hex
+chars, one per line, no `0x`), progress and stats go to stderr, and address
+derivation is skipped entirely — brainflayer does that math anyway, so the
+pipe runs at full transform speed.
+
+```
+cd vuke && cargo build --release
+
+# Classic brainwallet hunt over a wordlist
+./vuke/target/release/vuke generate --transform=sha256 --stream-keys \
+  wordlist --file passwords.txt | ../brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+
+# milksad-style range scan against a bloom filter
+./vuke/target/release/vuke generate --transform=milksad --stream-keys \
+  range --start 1 --end 100000000 | ../brainflayer-MultiBlooms/brainflayer -x -t priv -v -b bitcoin.blf
+
+# Several transforms in one pass (all keys of all transforms are streamed)
+./vuke/target/release/vuke generate --transform=sha256 --transform=double_sha256 \
+  --transform=md5 --stream-keys wordlist --file passwords.txt \
+  | ../brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+```
+
+`--stream-keys` also works in vuke's `scan` mode: the full key stream flows to
+stdout while vuke's own address matches (against `--targets`) are reported on
+stderr — two target sets checked in one pass.
+
+### Mixing generators
+
+Because both generators emit the same line format, you can also merge their
+streams with `tee`/`paste`-style plumbing or simply run two brainflayer
+processes against the same bloom filters — one fed by each generator:
+
+```
+./profanity.x64 --benchmark --stream-keys \
+  | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+./vuke/target/release/vuke generate --transform=milksad --stream-keys \
+  range --start 1 --end 100000000 \
+  | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+```
+
 ## brainflayer-MultiBlooms
 
 The vendored toolset is built and used like upstream brainflayer; see
@@ -155,17 +249,9 @@ reconstructs such a key from a public key:
 
 More background: [the original write-up](https://medium.com/@rebryk/how-to-hack-a-vanity-address-generated-with-profanity-ffad61ecacd2).
 
-## Related tools
-
-- [vuke](https://github.com/oritwoen/vuke) — Rust research tool for studying
-  vulnerable key generation (brainwallets, milksad, LCG, xorshift, SHA256
-  chains). Its `--stream-keys` mode — added in
-  [matbar14/vuke](https://github.com/matbar14/vuke) (`stream-keys` branch) —
-  feeds the same brainflayer pipes with keys derived from wordlists, numeric
-  ranges and historical PRNGs, complementing profanity's GPU-generated stream.
-
 ## Credits
 
 - [Johan Gustafsson (johguse)](https://github.com/johguse/profanity) — profanity
 - [Ryan Castellucci (ryancdotorg)](https://github.com/ryancdotorg/brainflayer) — brainflayer and brainflayer-MultiBlooms
 - [Yurii Rebryk (rebryk)](https://github.com/rebryk/profanity-brute-force) — reverse-mode rework and the profanity exploit write-up
+- [oritwoen](https://github.com/oritwoen/vuke) and vuke contributors — vuke (MIT, see `vuke/LICENSE`), bundled here with the `--stream-keys` addition
