@@ -12,9 +12,11 @@ filters of known addresses.
   into private keys via pluggable transforms (brainwallet SHA256, milksad, LCG
   family, xorshift, MT64, SHA256 chains, Bitimage and more), also with a
   `--stream-keys` mode.
-- **[brainflayer-MultiBlooms](https://github.com/ryancdotorg/brainflayer)** —
-  vendored brainflayer variant that can load multiple bloom filters at once,
-  consuming any generator's stream:
+- **[brainflayer-MultiBlooms](https://github.com/XopMC/brainflayer-MultiBlooms)** —
+  the brainflayer variant by [XopMC](https://github.com/XopMC/brainflayer-MultiBlooms)
+  that can load multiple bloom filters at once, consuming any generator's
+  stream (upstream brainflayer by
+  [ryancdotorg](https://github.com/ryancdotorg/brainflayer)):
 
 ```
 profanity --stream-keys ─┐
@@ -212,9 +214,12 @@ processes against the same bloom filters — one fed by each generator:
 
 ## brainflayer-MultiBlooms
 
-The vendored toolset is built and used like upstream brainflayer; see
-`brainflayer-MultiBlooms/README.md` for its full documentation, including how
-to create bloom filters (`hex2blf`) and load hash tables. The variant adds
+The bundled matcher is
+[XopMC's brainflayer-MultiBlooms](https://github.com/XopMC/brainflayer-MultiBlooms)
+variant, taken as-is — including its own README (`brainflayer-MultiBlooms/README.md`)
+with the author's notes and donation address. It is built and used like
+upstream brainflayer; see that README for full documentation, including how to
+create bloom filters (`hex2blf`) and load hash tables. The variant adds
 support for multiple bloom filters loaded at once.
 
 ## Reverse mode: auditing keys made with the original profanity
@@ -252,6 +257,7 @@ More background: [the original write-up](https://medium.com/@rebryk/how-to-hack-
 ## Credits
 
 - [Johan Gustafsson (johguse)](https://github.com/johguse/profanity) — profanity
-- [Ryan Castellucci (ryancdotorg)](https://github.com/ryancdotorg/brainflayer) — brainflayer and brainflayer-MultiBlooms
+- [XopMC](https://github.com/XopMC/brainflayer-MultiBlooms) — brainflayer-MultiBlooms, the brainflayer variant bundled here
+- [Ryan Castellucci (ryancdotorg)](https://github.com/ryancdotorg/brainflayer) — original brainflayer, on which brainflayer-MultiBlooms is based
 - [Yurii Rebryk (rebryk)](https://github.com/rebryk/profanity-brute-force) — reverse-mode rework and the profanity exploit write-up
 - [oritwoen](https://github.com/oritwoen/vuke) and vuke contributors — vuke (MIT, see `vuke/LICENSE`), bundled here with the `--stream-keys` addition
