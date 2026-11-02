@@ -191,21 +191,28 @@ chars, one per line, no `0x`), progress and stats go to stderr, and address
 derivation is skipped entirely — brainflayer does that math anyway, so the
 pipe runs at full transform speed.
 
+All commands in this section are run from the **repository root**.
+
 ```
-cd vuke && cargo build --release
+make vuke          # or: ./build-all.sh vuke, or: cd vuke && cargo build --release
 
 # Classic brainwallet hunt over a wordlist
 ./vuke/target/release/vuke generate --transform=sha256 --stream-keys \
-  wordlist --file passwords.txt | ../brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+  wordlist --file passwords.txt | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
 
 # milksad-style range scan against a bloom filter
 ./vuke/target/release/vuke generate --transform=milksad --stream-keys \
-  range --start 1 --end 100000000 | ../brainflayer-MultiBlooms/brainflayer -x -t priv -v -b bitcoin.blf
+  range --start 1 --end 100000000 | ./brainflayer-MultiBlooms/brainflayer -x -t priv -v -b bitcoin.blf
 
 # Several transforms in one pass (all keys of all transforms are streamed)
 ./vuke/target/release/vuke generate --transform=sha256 --transform=double_sha256 \
   --transform=md5 --stream-keys wordlist --file passwords.txt \
-  | ../brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+  | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+
+# Several bloom filters at once — the reason this is MultiBlooms
+./vuke/target/release/vuke generate --transform=milksad --stream-keys \
+  range --start 1 --end 100000000 \
+  | ./brainflayer-MultiBlooms/brainflayer -x -t priv -v -b 0_BDATA.blf -b 1_BDATA.blf -b 2_BDATA.blf
 ```
 
 `--stream-keys` also works in vuke's `scan` mode: the full key stream flows to
