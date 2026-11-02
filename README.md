@@ -155,6 +155,15 @@ reconstructs such a key from a public key:
 
 More background: [the original write-up](https://medium.com/@rebryk/how-to-hack-a-vanity-address-generated-with-profanity-ffad61ecacd2).
 
+## Related tools
+
+- [vuke](https://github.com/oritwoen/vuke) — Rust research tool for studying
+  vulnerable key generation (brainwallets, milksad, LCG, xorshift, SHA256
+  chains). Its `--stream-keys` mode — added in
+  [matbar14/vuke](https://github.com/matbar14/vuke) (`stream-keys` branch) —
+  feeds the same brainflayer pipes with keys derived from wordlists, numeric
+  ranges and historical PRNGs, complementing profanity's GPU-generated stream.
+
 ## Credits
 
 - [Johan Gustafsson (johguse)](https://github.com/johguse/profanity) — profanity
