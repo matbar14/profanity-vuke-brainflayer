@@ -126,12 +126,12 @@ unsigned int getUniqueDeviceIdentifier(const cl_device_id & deviceId) {
 }
 
 template <typename T> bool printResult(const T & t, const cl_int & err) {
-	std::cout << ((t == NULL) ? toString(err) : "OK") << std::endl;
+	std::cerr << ((t == NULL) ? toString(err) : "OK") << std::endl;
 	return t == NULL;
 }
 
 bool printResult(const cl_int err) {
-	std::cout << ((err != CL_SUCCESS) ? toString(err) : "OK") << std::endl;
+	std::cerr << ((err != CL_SUCCESS) ? toString(err) : "OK") << std::endl;
 	return err != CL_SUCCESS;
 }
 
@@ -172,6 +172,7 @@ int main(int argc, char * * argv) {
 		size_t inverseSize = 255;
 		size_t inverseMultiple = 16384;
 		bool bMineContract = false;
+		bool bStreamKeys = false;
 
 		argp.addSwitch('h', "help", bHelp);
 		argp.addSwitch('0', "benchmark", bModeBenchmark);
@@ -202,6 +203,7 @@ int main(int argc, char * * argv) {
 		argp.addSwitch('y', "skip-y", iModeSkipY);
 		argp.addSwitch('h', "hash-table", bModeHashTable);
 		argp.addSwitch('S', "single", bModeSingle);
+		argp.addSwitch('K', "stream-keys", bStreamKeys);
 
 		if (!argp.parse()) {
 			std::cout << "error: bad arguments, try again :<" << std::endl;
@@ -258,14 +260,14 @@ int main(int argc, char * * argv) {
 			std::cout << g_strHelp << std::endl;
 			return 0;
 		}
-		std::cout << "Mode: " << mode.name << std::endl;
+		std::cerr << "Mode: " << mode.name << std::endl;
 
 		if (bMineContract) {
 			mode.target = CONTRACT;
 		} else {
 			mode.target = ADDRESS;
 		}
-		std::cout << "Target: " << mode.transformName() << std:: endl;
+		std::cerr << "Target: " << mode.transformName() << std:: endl;
 
 		std::vector<cl_device_id> vFoundDevices = getAllDevices();
 		std::vector<cl_device_id> vDevices;
@@ -276,7 +278,7 @@ int main(int argc, char * * argv) {
 		cl_int errorCode;
 		bool bUsedCache = false;
 
-		std::cout << "Devices:" << std::endl;
+		std::cerr << "Devices:" << std::endl;
 		for (size_t i = 0; i < vFoundDevices.size(); ++i) {
 			// Ignore devices in skip index
 			if (std::find(vDeviceSkipIndex.begin(), vDeviceSkipIndex.end(), i) != vDeviceSkipIndex.end()) {
@@ -300,7 +302,7 @@ int main(int argc, char * * argv) {
 				}
 			}
 
-			std::cout << "  GPU" << i << ": " << strName << ", " << globalMemSize << " bytes available, " << computeUnits << " compute units (precompiled = " << (precompiled ? "yes" : "no") << ")" << std::endl;
+			std::cerr << "  GPU" << i << ": " << strName << ", " << globalMemSize << " bytes available, " << computeUnits << " compute units (precompiled = " << (precompiled ? "yes" : "no") << ")" << std::endl;
 			vDevices.push_back(vFoundDevices[i]);
 			mDeviceIndex[vFoundDevices[i]] = i;
 		}
@@ -309,9 +311,9 @@ int main(int argc, char * * argv) {
 			return 1;
 		}
 
-		std::cout << std::endl;
-		std::cout << "Initializing OpenCL..." << std::endl;
-		std::cout << "  Creating context..." << std::flush;
+		std::cerr << std::endl;
+		std::cerr << "Initializing OpenCL..." << std::endl;
+		std::cerr << "  Creating context..." << std::flush;
 		auto clContext = clCreateContext( NULL, vDevices.size(), vDevices.data(), NULL, NULL, &errorCode);
 		if (printResult(clContext, errorCode)) {
 			return 1;
@@ -322,7 +324,7 @@ int main(int argc, char * * argv) {
 			// Create program from binaries
 			bUsedCache = true;
 
-			std::cout << "  Loading kernel from binary..." << std::flush;
+		std::cerr << "  Loading kernel from binary..." << std::flush;
 			const unsigned char * * pKernels = new const unsigned char *[vDevices.size()];
 			for (size_t i = 0; i < vDeviceBinary.size(); ++i) {
 				pKernels[i] = reinterpret_cast<const unsigned char *>(vDeviceBinary[i].data());
@@ -336,7 +338,7 @@ int main(int argc, char * * argv) {
 			}
 		} else {
 			// Create a program from the kernel source
-			std::cout << "  Compiling kernel..." << std::flush;
+			std::cerr << "  Compiling kernel..." << std::flush;
 			const std::string strKeccak = readFile("keccak.cl");
 			const std::string strVanity = readFile("profanity.cl");
 			const char * szKernels[] = { strKeccak.c_str(), strVanity.c_str() };
@@ -348,7 +350,7 @@ int main(int argc, char * * argv) {
 		}
 
 		// Build the program
-		std::cout << "  Building program..." << std::flush;
+		std::cerr << "  Building program..." << std::flush;
 		const std::string strBuildOptions = "-D PROFANITY_INVERSE_SIZE=" + toString(inverseSize) + " -D PROFANITY_MAX_SCORE=" + toString(PROFANITY_MAX_SCORE);
 		if (printResult(clBuildProgram(clProgram, vDevices.size(), vDevices.data(), strBuildOptions.c_str(), NULL, NULL))) {
 #ifdef PROFANITY_DEBUG
@@ -368,17 +370,17 @@ int main(int argc, char * * argv) {
 
 		// Save binary to improve future start times
 		if( !bUsedCache && !bNoCache ) {
-			std::cout << "  Saving program..." << std::flush;
+			std::cerr << "  Saving program..." << std::flush;
 			auto binaries = getBinaries(clProgram);
 			for (size_t i = 0; i < binaries.size(); ++i) {
 				std::ofstream fileOut(getDeviceCacheFilename(vDevices[i], inverseSize), std::ios::binary);
 				fileOut.write(binaries[i].data(), binaries[i].size());
 			}
-			std::cout << "OK" << std::endl;
+			std::cerr << "OK" << std::endl;
 		}
 
-		std::cout << std::endl;
-		Dispatcher d(clContext, clProgram, mode, worksizeMax == 0 ? inverseSize * inverseMultiple : worksizeMax, inverseSize, inverseMultiple, 0);
+		std::cerr << std::endl;
+		Dispatcher d(clContext, clProgram, mode, worksizeMax == 0 ? inverseSize * inverseMultiple : worksizeMax, inverseSize, inverseMultiple, 0, bStreamKeys);
 		for (auto & i : vDevices) {
 			d.addDevice(i, worksizeLocal, mDeviceIndex[i]);
 		}

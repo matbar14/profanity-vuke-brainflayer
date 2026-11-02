@@ -97,7 +97,7 @@ class Dispatcher {
 		};
 
 	public:
-		Dispatcher(cl_context & clContext, cl_program & clProgram, const Mode mode, const size_t worksizeMax, const size_t inverseSize, const size_t inverseMultiple, const cl_uchar clScoreQuit = 0);
+		Dispatcher(cl_context & clContext, cl_program & clProgram, const Mode mode, const size_t worksizeMax, const size_t inverseSize, const size_t inverseMultiple, const cl_uchar clScoreQuit = 0, const bool streamKeys = false);
 		~Dispatcher();
 
 		void addDevice(cl_device_id clDeviceId, const size_t worksizeLocal, const size_t index);
@@ -159,6 +159,7 @@ class Dispatcher {
 		size_t m_stepsDone;
 		size_t m_stepsTotal;
 		bool m_quit;
+		bool m_streamKeys;
 		// size_t m_batchX;
 		size_t m_batchY;
 };

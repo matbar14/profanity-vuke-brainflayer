@@ -51,6 +51,19 @@ std::string privateKeyToStr(cl_ulong4 privateKey) {
 	return ss.str();
 }
 
+static void printPrivateKeyStream(cl_ulong4 seed, cl_ulong round, result r) {
+	// Format private key
+	cl_ulong4 privateKey = restorePrivateKey(seed, r.foundId, round);
+	
+	// Output only hex private key (64 chars, no "0x" prefix)
+	printf("%016llx%016llx%016llx%016llx\n",
+	       (unsigned long long)privateKey.s[3],
+	       (unsigned long long)privateKey.s[2],
+	       (unsigned long long)privateKey.s[1],
+	       (unsigned long long)privateKey.s[0]);
+	fflush(stdout);  // Important for real-time piping!
+}
+
 static void printResult(cl_ulong4 seed, cl_ulong round, result r, cl_uchar score, const std::chrono::time_point<std::chrono::steady_clock> & timeStart, const Mode & mode) {
 	// Time delta
 	const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - timeStart).count();
@@ -179,8 +192,8 @@ Dispatcher::Device::~Device() {
 
 }
 
-Dispatcher::Dispatcher(cl_context & clContext, cl_program & clProgram, const Mode mode, const size_t worksizeMax, const size_t inverseSize, const size_t inverseMultiple, const cl_uchar clScoreQuit)
-	: m_clContext(clContext), m_clProgram(clProgram), m_mode(mode), m_worksizeMax(worksizeMax), m_inverseSize(inverseSize), m_size(inverseSize*inverseMultiple), m_HashTableSize(HASH_TABLE_SET_SIZE * (mode.extended ? 2 : 1)), m_clScoreMax(mode.score), m_clScoreQuit(clScoreQuit), m_eventFinished(NULL), m_countPrint(0) {
+Dispatcher::Dispatcher(cl_context & clContext, cl_program & clProgram, const Mode mode, const size_t worksizeMax, const size_t inverseSize, const size_t inverseMultiple, const cl_uchar clScoreQuit, const bool streamKeys)
+	: m_clContext(clContext), m_clProgram(clProgram), m_mode(mode), m_worksizeMax(worksizeMax), m_inverseSize(inverseSize), m_size(inverseSize*inverseMultiple), m_HashTableSize(HASH_TABLE_SET_SIZE * (mode.extended ? 2 : 1)), m_clScoreMax(mode.score), m_clScoreQuit(clScoreQuit), m_streamKeys(streamKeys), m_eventFinished(NULL), m_countPrint(0) {
 
 }
 
@@ -195,24 +208,24 @@ void Dispatcher::addDevice(cl_device_id clDeviceId, const size_t worksizeLocal, 
 
 void printHexNumber(const mp_number & number) {
 	for (size_t i = 0; i < 8; ++i) {
-		std::cout << std::hex << std::setw(2) << std::setfill('0') << "0x" << number.d[i];
+		std::cerr << std::hex << std::setw(2) << std::setfill('0') << "0x" << number.d[i];
 		if (i != 7) {
-			std::cout << ", ";
+			std::cerr << ", ";
 		}
 	}
-	std::cout << std::dec;
+	std::cerr << std::dec;
 }
 
 void printTargetAddress(const point& target) {
-	std::cout << "Target public address:" << std::endl;
+	std::cerr << "Target public address:" << std::endl;
 	
-	std::cout << "x = {{";
+	std::cerr << "x = {{";
 	printHexNumber(target.x);
-	std::cout << "}}" << std::endl;
+	std::cerr << "}}" << std::endl;
 
-	std::cout << "y = {{";
+	std::cerr << "y = {{";
 	printHexNumber(target.y);
-	std::cout << "}}" << std::endl;
+	std::cerr << "}}" << std::endl;
 }
 
 void Dispatcher::runReverse() {
@@ -221,16 +234,16 @@ void Dispatcher::runReverse() {
 	const int nJobs = m_mode.extended ? 4 : 8;
 	const size_t m_batchYTotal = nJobs / m_vDevices.size();
 
-	std::cout << "Memory limit: " << (m_mode.extended ? "16Gb" : "8Gb") << std::endl;
-	std::cout << "Number of batches: " << m_batchYTotal << std::endl;
+	std::cerr << "Memory limit: " << (m_mode.extended ? "16Gb" : "8Gb") << std::endl;
+	std::cerr << "Number of batches: " << m_batchYTotal << std::endl;
 
 	if (isReverse) {
-		std::cout << "Number of steps: " << m_mode.steps << std::endl;
+		std::cerr << "Number of steps: " << m_mode.steps << std::endl;
 		printTargetAddress(m_mode.targetAddress);
 	}
 
 	if (m_mode.skipY) {
-		std::cout << "Skip y: " << m_mode.skipY << " batches" << std::endl;
+		std::cerr << "Skip y: " << m_mode.skipY << " batches" << std::endl;
 	}
 
 	timeStart = std::chrono::steady_clock::now();
@@ -241,18 +254,18 @@ void Dispatcher::runReverse() {
 			m_vDevices[i]->m_batchIndex = m_batchY * m_countRunning + i;
 		}
 
-		std::cout << "Run batch " << m_batchY + 1 << "..." << std::endl;
-		std::cout << "Run initialization..." << std::endl;
+		std::cerr << "Run batch " << m_batchY + 1 << "..." << std::endl;
+		std::cerr << "Run initialization..." << std::endl;
 		timeInitStart = std::chrono::steady_clock::now();
 		init();
 		const auto timeInitialization = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - timeInitStart).count();
-		std::cout << "Initialization time: " << timeInitialization << " seconds" << std::endl;
+		std::cerr << "Initialization time: " << timeInitialization << " seconds" << std::endl;
 		
 		if (!isReverse) {
 			continue;
 		}
 
-		std::cout << "Run search..." << std::endl;
+		std::cerr << "Run search..." << std::endl;
 		timeRunStart = std::chrono::steady_clock::now();
 		m_eventFinished = clCreateUserEvent(m_clContext, NULL);
 
@@ -266,7 +279,7 @@ void Dispatcher::runReverse() {
 
 		if (!m_quit) {
 			const auto timeRun = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - timeRunStart).count();
-			std::cout << "Search time: " << timeRun << " seconds" << std::endl;
+			std::cerr << "Search time: " << timeRun << " seconds" << std::endl;
 		}
 
 		// Break if single mode is enabled
@@ -288,17 +301,17 @@ void Dispatcher::run() {
 	init();
 
 	const auto timeInitialization = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - timeStart).count();
-	std::cout << "Initialization time: " << timeInitialization << " seconds" << std::endl;
+	std::cerr << "Initialization time: " << timeInitialization << " seconds" << std::endl;
 
 	m_quit = false;
 	m_countRunning = m_vDevices.size();
 
-	std::cout << "Running..." << std::endl;
-	std::cout << "  Always verify that a private key generated by this program corresponds to the" << std::endl;
-	std::cout << "  public key printed by importing it to a wallet of your choice. This program" << std::endl;
-	std::cout << "  like any software might contain bugs and it does by design cut corners to" << std::endl;
-	std::cout << "  improve overall performance." << std::endl;
-	std::cout << std::endl;
+	std::cerr << "Running..." << std::endl;
+	std::cerr << "  Always verify that a private key generated by this program corresponds to the" << std::endl;
+	std::cerr << "  public key printed by importing it to a wallet of your choice. This program" << std::endl;
+	std::cerr << "  like any software might contain bugs and it does by design cut corners to" << std::endl;
+	std::cerr << "  improve overall performance." << std::endl;
+	std::cerr << std::endl;
 
 	for (auto it = m_vDevices.begin(); it != m_vDevices.end(); ++it) {
 		dispatch(*(*it));
@@ -311,13 +324,13 @@ void Dispatcher::run() {
 
 void Dispatcher::init() {
 	if (m_mode.name != "reverse" && m_mode.name != "hashTable") {
-		std::cout << "Initializing devices..." << std::endl;
-		std::cout << "  This should take less than a minute. The number of objects initialized on each" << std::endl;
-		std::cout << "  device is equal to inverse-size * inverse-multiple. To lower" << std::endl;
-		std::cout << "  initialization time (and memory footprint) I suggest lowering the" << std::endl;
-		std::cout << "  inverse-multiple first. You can do this via the -I switch. Do note that" << std::endl;
-		std::cout << "  this might negatively impact your performance." << std::endl;
-		std::cout << std::endl;
+		std::cerr << "Initializing devices..." << std::endl;
+		std::cerr << "  This should take less than a minute. The number of objects initialized on each" << std::endl;
+		std::cerr << "  device is equal to inverse-size * inverse-multiple. To lower" << std::endl;
+		std::cerr << "  initialization time (and memory footprint) I suggest lowering the" << std::endl;
+		std::cerr << "  inverse-multiple first. You can do this via the -I switch. Do note that" << std::endl;
+		std::cerr << "  this might negatively impact your performance." << std::endl;
+		std::cerr << std::endl;
 	}
 
 	const auto deviceCount = m_vDevices.size();
@@ -346,7 +359,7 @@ void Dispatcher::init() {
 
 	delete[] pInitEvents;
 
-	std::cout << std::endl;
+	std::cerr << std::endl;
 }
 
 void Dispatcher::initBegin(Device & d) {
@@ -454,7 +467,7 @@ void Dispatcher::initHashTableContinue(Device & d) {
 		const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - timeInitStart).count();
 		const float progress = m_sizeHashTableInitDone * 100.0 / m_sizeHashTableInitTotal;
 		const size_t remaining = (100.0 - progress) * (seconds / progress);
-		std::cout << "  " << size_t(progress) << "% (remaining " << std::setfill(' ') << std::setw(3) << (progress > 0 ? remaining : 0) << ")" << "\r" << std::flush;
+		std::cerr << "  " << size_t(progress) << "% (remaining " << std::setfill(' ') << std::setw(3) << (progress > 0 ? remaining : 0) << ")" << "\r" << std::flush;
 	}
 
 	if (d.m_iterHashTableInitialized == 0 && m_mode.name == "reverse") {
@@ -505,7 +518,7 @@ void Dispatcher::initContinue(Device & d) {
 	// Print progress
 	if (m_mode.name != "reverse" && m_mode.name != "hashTable") {
 		const size_t percentDone = m_sizeInitDone * 100 / m_sizeInitTotal;
-		std::cout << "  " << percentDone << "%\r" << std::flush;
+		std::cerr << "  " << percentDone << "%\r" << std::flush;
 	}
 
 	if (sizeLeft) {
@@ -531,7 +544,7 @@ void Dispatcher::initContinue(Device & d) {
 	} else {
 		// Printing one whole string at once helps in avoiding garbled output when executed in parallell
 		// const std::string strOutput = "  GPU" + toString(d.m_index) + " initialized";
-		// std::cout << strOutput << std::endl;
+		// std::cerr << strOutput << std::endl;
 		clSetUserEventStatus(d.m_eventFinished, CL_COMPLETE);
 	}
 }
@@ -556,7 +569,7 @@ void Dispatcher::enqueueKernelDevice(Device & d, cl_kernel & clKernel, size_t wo
 	} catch ( OpenCLException & e ) {
 		// If local work size is invalid, abandon it and let implementation decide
 		if ((e.m_res == CL_INVALID_WORK_GROUP_SIZE || e.m_res == CL_INVALID_WORK_ITEM_SIZE) && d.m_worksizeLocal != 0) {
-			std::cout << std::endl << "warning: local work size abandoned on GPU" << d.m_index << std::endl;
+			std::cerr << std::endl << "warning: local work size abandoned on GPU" << d.m_index << std::endl;
 			d.m_worksizeLocal = 0;
 			enqueueKernel(d.m_clQueue, clKernel, worksizeGlobal, d.m_worksizeLocal, pEvent);
 		}
@@ -632,8 +645,8 @@ void Dispatcher::handleReverse(Device & d) {
 					const std::string strPrivate = privateKeyToStr(privateKey);
 					// Print
 					const std::string strVT100ClearLine = "\33[2K\r";
-					std::cout << "Id: " << r.foundId << " Round: " << m_mode.skipX + d.m_round - 2 << std::endl;
-					std::cout << strVT100ClearLine << "Time: " << std::setw(5) << seconds << " Private: 0x" << strPrivate << std::endl;
+					std::cerr << "Id: " << r.foundId << " Round: " << m_mode.skipX + d.m_round - 2 << std::endl;
+					std::cerr << strVT100ClearLine << "Time: " << std::setw(5) << seconds << " Private: 0x" << strPrivate << std::endl;
 				}
 			}
 		}
@@ -656,7 +669,12 @@ void Dispatcher::handleResult(Device & d) {
 					m_quit = true;
 				}
 
-				printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
+				// Choose output format based on streamKeys flag
+				if (m_streamKeys) {
+					printPrivateKeyStream(d.m_clSeed, d.m_round, r);
+				} else {
+					printResult(d.m_clSeed, d.m_round, r, i, timeStart, m_mode);
+				}
 			}
 
 			break;
@@ -666,7 +684,7 @@ void Dispatcher::handleResult(Device & d) {
 
 void Dispatcher::onEvent(cl_event event, cl_int status, Device & d) {
 	if (status != CL_COMPLETE) {
-		std::cout << "Dispatcher::onEvent - Got bad status: " << status << std::endl;
+		std::cerr << "Dispatcher::onEvent - Got bad status: " << status << std::endl;
 	}
 	else if (d.m_eventFinished != NULL) {
 		if (d.m_mode.name == "reverse" || d.m_mode.name == "hashTable") {
@@ -742,7 +760,7 @@ void Dispatcher::onEvent(cl_event event, cl_int status, Device & d) {
 		// 	key = (key << 32) | d.m_memInversedNegativeDoubleGy[i].d[0];
 		// 	unsigned int l = d.m_memInversedNegativeDoubleGy[i].d[2];
 		// 	unsigned int r = d.m_memInversedNegativeDoubleGy[i].d[3];
-		// 	std::cout << key << " " << l << " " << r << std::endl;
+		// 	std::cerr << key << " " << l << " " << r << std::endl;
 		// }
 
 		if (m_mode.name == "reverse") {
