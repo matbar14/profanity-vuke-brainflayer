@@ -1,4 +1,4 @@
-# profanity-brainflayer
+# profanity-vuke-brainflayer
 
 One toolkit, three parts: **two key generators** that both stream every key
 they produce, and **one matcher** that checks that stream against bloom
@@ -52,6 +52,8 @@ What you get:
 ## Repository layout
 
 ```
+├── build-all.sh
+│       builds all three programs, checks dependencies first
 ├── Makefile, profanity.cpp, Dispatcher.*, Mode.*, keccak.cl, profanity.cl
 │       profanity sources (C++ / OpenCL)
 ├── pubkey.py, requirements.txt
@@ -69,6 +71,18 @@ Build artifacts (`.o` files, prebuilt binaries, autotools cache) are no longer
 committed — build everything from source as described below.
 
 ## Building
+
+All three programs at once, with dependency pre-checks and a summary of what
+was built:
+
+```
+./build-all.sh                  # build profanity + vuke + brainflayer
+./build-all.sh vuke brain       # build only the named components
+./build-all.sh -j 8             # run make with 8 parallel jobs
+```
+
+If something is missing, the script names the exact package to install and
+you can re-run it for just the failed parts. Per-component details:
 
 ### profanity
 
