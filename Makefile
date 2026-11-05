@@ -15,7 +15,11 @@ endif
 
 all: $(SOURCES) $(EXECUTABLE)
 
-.PHONY: vuke brainflayer
+.PHONY: vuke brainflayer randpass
+
+# NSA RandPassGenerator (Java) - needs a JDK or Ant
+randpass:
+	cd RandPassGenerator && ./build-jar.sh
 
 # Rust generator (vuke/) - needs a Rust toolchain
 vuke:

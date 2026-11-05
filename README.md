@@ -1,8 +1,8 @@
 # profanity-vuke-brainflayer
 
-One toolkit, three parts: **two key generators** that both stream every key
-they produce, and **one matcher** that checks that stream against bloom
-filters of known addresses.
+One toolkit: **three key feeders** that all stream candidates in the same
+format, and **one matcher** that checks the stream against bloom filters of
+known addresses.
 
 - **[profanity](https://github.com/johguse/profanity)** — an OpenCL vanity
   address generator for Ethereum, extended here with a **full key streaming
@@ -12,6 +12,11 @@ filters of known addresses.
   into private keys via pluggable transforms (brainwallet SHA256, milksad, LCG
   family, xorshift, MT64, SHA256 chains, Bitimage and more), also with a
   `--stream-keys` mode.
+- **[RandPassGenerator](https://github.com/nsacyber/RandPassGenerator)**
+  (bundled under `RandPassGenerator/`) — the NSA's conservative CSPRNG
+  generator of random passwords, passphrases and raw hex keys. Its raw keys
+  pipe into brainflayer directly; its passwords go through vuke's `stdin`
+  source to model brainwallets made from machine-generated passwords.
 - **[brainflayer-MultiBlooms](https://github.com/XopMC/brainflayer-MultiBlooms)** —
   the brainflayer variant by [XopMC](https://github.com/XopMC/brainflayer-MultiBlooms)
   that can load multiple bloom filters at once, consuming any generator's
@@ -19,16 +24,21 @@ filters of known addresses.
   [ryancdotorg](https://github.com/ryancdotorg/brainflayer)):
 
 ```
-profanity --stream-keys ─┐
-                         ├─▶ brainflayer -x -t priv -b bitcoin.blf
-vuke --stream-keys ──────┘
+profanity --stream-keys ─────────┐
+                                 │
+vuke --stream-keys ──────────────┼─▶ brainflayer -x -t priv -b *.blf
+                                 │
+RandPassGenerator -k -nokeyid ───┤
+                                 │
+RandPassGenerator -pw → vuke ────┘
 ```
 
-Both generators emit the identical stream format — one private key per line,
+Every path ends in the identical stream format — one private key per line,
 64 lowercase hex chars, no `0x` prefix — which is exactly what
-`brainflayer -x -t priv` expects. Pick a generator by workload:
+`brainflayer -x -t priv` expects. Pick a feeder by workload:
 profanity for raw GPU throughput on arbitrary keys, vuke for CPU enumeration
-of *known-weak* key derivation practices.
+of *known-weak* key derivation practices, RandPassGenerator for
+CSPRNG-quality passwords, passphrases and keys.
 
 What you get:
 
@@ -48,12 +58,15 @@ What you get:
   checked into the tree — no git submodules needed.
 - **Vendored vuke** with its own `--stream-keys` mode — the same brainflayer
   pipe format, driven by CPU-side transforms instead of a GPU.
+- **Vendored RandPassGenerator** (NSA, public domain) with a `-nokeyid` patch
+  so its raw-key mode emits a clean, pippable stream
+  (see `RandPassGenerator/PATCHES.md`).
 
 ## Repository layout
 
 ```
 ├── build-all.sh
-│       builds all three programs, checks dependencies first
+│       builds all the programs, checks dependencies first
 ├── Makefile, profanity.cpp, Dispatcher.*, Mode.*, keccak.cl, profanity.cl
 │       profanity sources (C++ / OpenCL)
 ├── pubkey.py, requirements.txt
@@ -61,10 +74,13 @@ What you get:
 ├── brainflayer-MultiBlooms/
 │       brainflayer variant supporting multiple bloom filters,
 │       with vendored secp256k1/ and scrypt-jane/ (plain sources)
-└── vuke/
-        Rust key generator (sources: wordlist/range/stdin/timestamps/files;
-        transforms: sha256, milksad, LCG, xorshift, mt64, ...)
-        with --stream-keys for the same brainflayer pipe
+├── vuke/
+│       Rust key generator (sources: wordlist/range/stdin/timestamps/files;
+│       transforms: sha256, milksad, LCG, xorshift, mt64, ...)
+│       with --stream-keys for the same brainflayer pipe
+└── RandPassGenerator/
+        NSA CSPRNG password/passphrase/raw-key generator (Java),
+        with the -nokeyid patch for raw key streaming
 ```
 
 Build artifacts (`.o` files, prebuilt binaries, autotools cache) are no longer
@@ -72,11 +88,11 @@ committed — build everything from source as described below.
 
 ## Building
 
-All three programs at once, with dependency pre-checks and a summary of what
+All programs at once, with dependency pre-checks and a summary of what
 was built:
 
 ```
-./build-all.sh                  # build profanity + vuke + brainflayer
+./build-all.sh                  # build profanity + vuke + brainflayer + randpass
 ./build-all.sh vuke brain       # build only the named components
 ./build-all.sh -j 8             # run make with 8 parallel jobs
 ```
@@ -114,6 +130,16 @@ make vuke           # from the repo root
 
 GPU (`--features gpu`, wgpu) and Parquet storage (`--features storage`) are
 optional cargo features of vuke, not needed for streaming into brainflayer.
+
+### RandPassGenerator
+
+Requires a Java runtime to run and Ant or a JDK to build (a `python3`-only
+fallback is built in for boxes with a stripped JDK):
+
+```
+make randpass       # from the repo root, or: ./build-all.sh randpass
+# → RandPassGenerator/build/jar/PassGenerator.jar
+```
 
 ## profanity usage
 
@@ -219,17 +245,59 @@ make vuke          # or: ./build-all.sh vuke, or: cd vuke && cargo build --relea
 stdout while vuke's own address matches (against `--targets`) are reported on
 stderr — two target sets checked in one pass.
 
+## RandPassGenerator: CSPRNG passwords, passphrases and raw keys
+
+The NSA's [RandPassGenerator](https://github.com/nsacyber/RandPassGenerator)
+(bundled under `RandPassGenerator/`, public domain) draws from a HashDRBG
+seeded by the OS entropy pool. Two ways to feed the pipeline:
+
+**Raw keys — straight into brainflayer.** With our `-nokeyid` patch and
+`-str 256`, `-k` mode emits clean 64-hex private keys, exactly the brainflayer
+feed format:
+
+```
+java -jar RandPassGenerator/build/jar/PassGenerator.jar -k 1000000 -str 256 -nokeyid \
+  | ./brainflayer-MultiBlooms/brainflayer -x -t priv -v -b 0_BDATA.blf -b 1_BDATA.blf
+```
+
+**Passwords/passphrases — through vuke's `stdin` source.** This models
+brainwallets whose secret was a machine-generated password (sha256 of the
+password becomes the key):
+
+```
+java -jar RandPassGenerator/build/jar/PassGenerator.jar -pw 1000000 \
+  | ./vuke/target/release/vuke generate --transform=sha256 --stream-keys stdin \
+  | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+
+# passphrases instead of passwords (-pp; bundled wordlist is used)
+java -jar RandPassGenerator/build/jar/PassGenerator.jar -pp 100000 -str 128 -pplen 7 \
+  | ./vuke/target/release/vuke generate --transform=sha256 --stream-keys stdin \
+  | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+```
+
+Useful flags: `-str S` (bit strength, default 160; use 256 for full-size
+keys), `-pwcs P` (character pattern, e.g. `aA9`), `-pplen M` (max passphrase
+word length), `-ppurl U` (custom wordlist), `-log F` (by default the tool
+writes `randpass.log` into the current directory). Run it with no arguments
+for the full option list. Note this is a CSPRNG feeder: like profanity's
+random stream, it enumerates *strong* randomness, so hits against bloom
+filters of weak/human-derived keys are not expected — it is here to complete
+the toolset (e.g. for verifying large key batches, generating test data, or
+auditing keys that came from password-manager-generated secrets).
+
 ### Mixing generators
 
-Because both generators emit the same line format, you can also merge their
-streams with `tee`/`paste`-style plumbing or simply run two brainflayer
-processes against the same bloom filters — one fed by each generator:
+Because every feeder emits the same line format, you can also merge streams
+with `tee`/`paste`-style plumbing or simply run several brainflayer processes
+against the same bloom filters — one per feeder:
 
 ```
 ./profanity.x64 --benchmark --stream-keys \
   | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
 ./vuke/target/release/vuke generate --transform=milksad --stream-keys \
   range --start 1 --end 100000000 \
+  | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
+java -jar RandPassGenerator/build/jar/PassGenerator.jar -k 1000000 -str 256 -nokeyid \
   | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf
 ```
 
@@ -282,3 +350,4 @@ More background: [the original write-up](https://medium.com/@rebryk/how-to-hack-
 - [Ryan Castellucci (ryancdotorg)](https://github.com/ryancdotorg/brainflayer) — original brainflayer, on which brainflayer-MultiBlooms is based
 - [Yurii Rebryk (rebryk)](https://github.com/rebryk/profanity-brute-force) — reverse-mode rework and the profanity exploit write-up
 - [oritwoen](https://github.com/oritwoen/vuke) and vuke contributors — vuke (MIT, see `vuke/LICENSE`), bundled here with the `--stream-keys` addition
+- [NSA Cybersecurity Directorate](https://github.com/nsacyber/RandPassGenerator) — RandPassGenerator (US Government work, CC0 1.0, see `RandPassGenerator/LICENSE.md`), bundled here with the `-nokeyid` addition

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# build-all.sh — build the three programs of this toolkit:
+# build-all.sh — build the programs of this toolkit:
 #
 #   profanity   GPU vanity generator (C++ / OpenCL)      -> ./profanity.x64
 #   vuke        CPU transform generator (Rust)           -> vuke/target/release/vuke
 #   brain       brainflayer-MultiBlooms matcher (C)      -> brainflayer-MultiBlooms/brainflayer
+#   randpass    NSA RandPassGenerator (Java)             -> RandPassGenerator/build/jar/PassGenerator.jar
 #
 # Usage:
 #   ./build-all.sh                    # build everything
 #   ./build-all.sh vuke brain         # build only the named components
 #   ./build-all.sh -j 8               # run make with 8 jobs
 #
-# Component names: profanity | vuke | brain (alias: brainflayer) | all
+# Component names: profanity | vuke | brain (alias: brainflayer) | randpass | all
 
 set -u
 cd "$(dirname "$0")" || exit 1
@@ -27,12 +28,13 @@ while [ $# -gt 0 ]; do
         profanity)   TARGETS="$TARGETS profanity"; shift ;;
         vuke)        TARGETS="$TARGETS vuke"; shift ;;
         brain|brainflayer) TARGETS="$TARGETS brain"; shift ;;
-        all)         TARGETS="profanity vuke brain"; shift ;;
+        randpass|randpassgen) TARGETS="$TARGETS randpass"; shift ;;
+        all)         TARGETS="profanity vuke brain randpass"; shift ;;
         -h|--help)   usage ;;
         *) echo "build-all.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
     esac
 done
-[ -z "$TARGETS" ] && TARGETS="profanity vuke brain"
+[ -z "$TARGETS" ] && TARGETS="profanity vuke brain randpass"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 say()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
@@ -99,6 +101,25 @@ build_brain() {
     bad "brainflayer build failed"; return 1
 }
 
+# ---------------------------------------------------------------- randpass
+build_randpass() {
+    say "RandPassGenerator — NSA CSPRNG passwords/keys (Java)"
+    if ! have java; then
+        bad "java not found"; hint "Debian/Ubuntu: apt install default-jre (build also needs default-jdk)"
+        return 1
+    fi
+    if ! have ant && ! have javac && ! have python3; then
+        bad "none of ant / javac / python3 found to build the jar"
+        hint "Debian/Ubuntu: apt install default-jdk"
+        return 1
+    fi
+    if (cd RandPassGenerator && ./build-jar.sh); then
+        ok "built RandPassGenerator/build/jar/PassGenerator.jar"
+        return 0
+    fi
+    bad "RandPassGenerator build failed"; return 1
+}
+
 # ---------------------------------------------------------------- run
 FAILED=""
 for t in $TARGETS; do
@@ -111,6 +132,7 @@ printf '\n\033[1m========== SUMMARY ==========\033[0m\n'
 echo "profanity : ./profanity.x64"
 echo "vuke      : vuke/target/release/vuke"
 echo "brain     : brainflayer-MultiBlooms/brainflayer"
+echo "randpass  : RandPassGenerator/build/jar/PassGenerator.jar"
 if [ -n "$FAILED" ]; then
     bad "failed:$FAILED"
     printf '\nFix the missing dependencies above and re-run (only the failed parts:\n./build-all.sh%s)\n' "$FAILED"
@@ -120,4 +142,6 @@ ok "all requested components built"
 printf '\nSmoke test the pipeline:\n'
 echo '  ./profanity.x64 --benchmark --stream-keys | ./brainflayer-MultiBlooms/brainflayer -x -t priv -v -b bitcoin.blf'
 echo '  ./vuke/target/release/vuke generate --transform=sha256 --stream-keys wordlist --file words.txt | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf'
+echo '  java -jar RandPassGenerator/build/jar/PassGenerator.jar -pw 100000 | ./vuke/target/release/vuke generate --transform=sha256 --stream-keys stdin | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf'
+echo '  java -jar RandPassGenerator/build/jar/PassGenerator.jar -k 100000 -str 256 -nokeyid | ./brainflayer-MultiBlooms/brainflayer -x -t priv -b bitcoin.blf'
 exit 0
